@@ -1,0 +1,39 @@
+# Straightforward: a single packet with a single PDU.
+O
+0000  03 61 62 63
+
+# Single packet with multiple PDUs.
+O
+0000  03 78 79 7a 03 61 62 63
+
+# A single PDU split across multiple packets.
+O
+0000  0A 68 65 6C
+O
+0000  6C 6F 77
+O
+0000  6F 72 6C 64
+
+# A single packet with a single PDU again.
+O
+0000  03 78 79 7A
+
+# A packet containing a whole PDU and then a partial PDU.
+O
+0000  03 61 62 63 01
+O
+0000  78
+
+# A packet completing a PDU, and then a full PDU.
+O
+0000  03 61
+O
+0000  62 63 01 64
+
+# A PDU split across two packets, interrupted by a PDU on a different stream.
+O
+0000  03 61 62
+I
+0000  03 78 79 7A
+O
+0000  63
