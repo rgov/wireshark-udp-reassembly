@@ -80,7 +80,7 @@ function proto.dissector(buffer, pinfo, tree)
     local whole_buffer = ByteArray.new()
     local i = prev_pkt_num
     while i do
-        prev_state = fragments[i]
+        local prev_state = fragments[i]
         if prev_state.buffer then
             whole_buffer:prepend(ByteArray.new(prev_state.buffer, true))
         end
