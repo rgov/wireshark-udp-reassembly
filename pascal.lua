@@ -1,4 +1,6 @@
 local proto = Proto("pascal", "Pascal Strings")
+proto.fields.length = ProtoField.uint8("pascal.length", "Length", base.DEC)
+proto.fields.content = ProtoField.string("pascal.content", "Content")
 
 -- The reassembly table is a table of tables,
 --
@@ -39,11 +41,12 @@ local function read_complete_pdu(tvb, tree)
     local length = tvb(0, 1):uint()
     if tvb:len() < (1 + length) then return nil end
 
-    local subtree = tree:add(proto, tvb, "Pascal String")
-    subtree:add(tvb:range(0, 1), "Length: " .. length)
-    subtree:add(tvb:range(1, length), "Content: " .. tvb:range(1, length):string())
+    -- Make sure we only use the range of the buffer that we are consuming.
+    local subtree = tree:add(proto, tvb:range(0, 1 + length), "Pascal String")
+    subtree:add(proto.fields.length, tvb:range(0, 1))
+    subtree:add(proto.fields.content, tvb:range(1, length))
 
-    return 1 + length
+    return subtree.len
 end
 
 
@@ -97,9 +100,6 @@ function proto.dissector(buffer, pinfo, tree)
         tvb = buffer
     end
 
-    -- Create a subtree for our protocol data.
-    local proto_tree = tree:add(proto, tvb:range(0), "My Protocol Data")
-
     -- Loop to extract one or more complete PDUs.
     local offset = 0
     local pdu_count = 0
@@ -128,9 +128,6 @@ function proto.dissector(buffer, pinfo, tree)
     else
         fragments[pinfo.number] = { buffer = leftover, prev = nil }
     end
-
-    proto_tree:add(proto, tvb(), "Buffer: " .. (leftover and ByteArray.new(leftover):tohex() or "nil"))
-    proto_tree:add(proto, tvb(), "Previous: " .. (pdu_count == 0 and prev_pkt_num or "nil"))
 end
 
 -- Register the dissector for a given UDP port
