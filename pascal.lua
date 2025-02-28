@@ -22,7 +22,7 @@ proto.fields.content = ProtoField.string("pascal.content", "Content")
 local fragments_by_stream = {}
 
 
--- Return a unique identifier for the stream that the packet belongs to.
+-- Returns a unique identifier for the stream that the packet belongs to.
 local function get_stream_key(pinfo)
     return tostring(pinfo.src) .. ":" .. tostring(pinfo.src_port) ..
         "->" .. tostring(pinfo.dst) .. ":" .. tostring(pinfo.dst_port)
@@ -34,23 +34,50 @@ end
 -- This is the only part of the dissector that needs to know how to parse the
 -- protocol. Reimplement to suit other protocols.
 --
+-- buffer is the ByteArray containing the data to parse.
+--
+-- tvb is either a Tvb for the current packet, or nil if the PDU begain in an
+-- earlier packet. In this case, create a new Tvb from the buffer *after* we
+-- have validated that we have a complete PDU.
+--
 -- Returns the number of bytes consumed, or nil if there is not a complete PDU
--- in the buffer.
-local function read_complete_pdu(tvb, tree)
-    if tvb:len() < 1 then return nil end
-    local length = tvb(0, 1):uint()
-    if tvb:len() < (1 + length) then return nil end
+-- in the buffer. Optionally, also return  a string to be appended to the
+-- packet's Info column.
+local function read_complete_pdu(buffer, tvb, tree)
+    -- Parse data from the buffer, not the tvb
+    if buffer:len() < 1 then return nil end
+    local length = buffer:uint(0, 1)
+    if buffer:len() < (1 + length) then return nil end
+
+    -- If this is a reassembled PDU, create a new Tvb. Only do this after we've
+    -- validated that we have a full PDU, because this triggers the creation
+    -- of a new tab in the Packet Bytes view in the UI.
+    local was_reassembled = false
+    if not tvb then
+        was_reassembled = true
+        tvb = buffer:tvb("Reassembled PDU")
+    end
 
     -- Make sure we only use the range of the buffer that we are consuming.
-    local subtree = tree:add(proto, tvb:range(0, 1 + length), "Pascal String")
+    local subtree = tree:add(
+        proto,
+        tvb:range(0, 1 + length),
+        "Pascal String \"" .. tvb:raw(1, length) .. "\""
+    )
     subtree:add(proto.fields.length, tvb:range(0, 1))
     subtree:add(proto.fields.content, tvb:range(1, length))
 
-    return subtree.len
+    -- Build a string to append to the packet's' Info column
+    local info = "\"" .. tvb:raw(1, length) .. "\""
+    if was_reassembled then
+        info = info .. " (reassembled)"
+    end
+
+    return subtree.len, info
 end
 
 
-function proto.dissector(buffer, pinfo, tree)
+function proto.dissector(tvb, pinfo, tree)
     -- Look up the reassembly state for this stream
     local key = get_stream_key(pinfo)
     if not fragments_by_stream[key] then
@@ -91,34 +118,49 @@ function proto.dissector(buffer, pinfo, tree)
     local was_reassembled = earlier_fragment_len > 0
 
     -- Add the current packet data, too.
-    whole_buffer:append(buffer:bytes())
-
-    -- If we reassembled a Tvb..
-    if was_reassembled then
-        tvb = whole_buffer:tvb("Reassembled Data")
-    else
-        tvb = buffer
-    end
+    whole_buffer:append(tvb:bytes())
 
     -- Loop to extract one or more complete PDUs.
     local offset = 0
     local pdu_count = 0
+    local infos = {}
     while offset < whole_buffer:len() do
-        -- Check if we have enough data for a complete PDU.
-        local consumed = read_complete_pdu(tvb:range(offset), tree)
-        if not consumed then
-            break -- Not enough data to form a complete PDU.
+        -- If we are parsing from within the current packet, then we will pass
+        -- read_complete_pdu() a TvbRange within the current packet. Otherwise,
+        -- we pass nil, indicating that we are parsing from a reassembled
+        -- buffer, and a new Tvb should be created if a complete PDU is found.
+        local tvb2 = nil
+        if offset >= earlier_fragment_len then
+            tvb2 = tvb:range(offset - earlier_fragment_len)
         end
+
+        -- Try to consume a complete PDU from the buffer at offset. If this
+        -- returns nil, then it is an incomplete PDU.
+        local consumed, info = read_complete_pdu(
+            whole_buffer:subset(offset, whole_buffer:len() - offset),
+            tvb2,
+            tree
+        )
+
+        if not consumed then
+            table.insert(infos, "fragment")
+            break
+        end
+
+        table.insert(infos, info)
         offset = offset + consumed
         pdu_count = pdu_count + 1
     end
 
+    -- Set the Info column to the comma-delimited list of info strings.
+    pinfo.cols.info = table.concat(infos, ", ")
+
     -- If there is any left over data, we will save the unconsumed fragment in
     -- the fragments table.
     local leftover = nil
-    if offset < tvb:len() then
+    if offset < whole_buffer:len() then
         local consumed_from_current = math.max(0, offset - earlier_fragment_len)
-        leftover = buffer:range(consumed_from_current):bytes():raw()
+        leftover = tvb:range(consumed_from_current):bytes():raw()
     end
 
     -- If we failed to extract a full PDU, then use the linked list to connect
