@@ -1,3 +1,5 @@
+![Screenshot of Wireshark demonstrating a reassembled PDU](screenshot.png?raw=true)
+
 # Example Wireshark Dissector with UDP Reassembly
 
 This repository implements a Lua dissector for Wireshark that demonstrates how to handle UDP reassembly.
